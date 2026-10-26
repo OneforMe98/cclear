@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+langchain-openai
+langgraph
+langgraph-checkpoint-sqlite
+send2trash
+
+# 开发/测试依赖
+pytest
+httpx

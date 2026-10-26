@@ -1,0 +1,24 @@
+# Node
+node_modules/
+dist/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 环境变量（API Key 等）——注意：要保留 .env.example 模板
+.env
+.env.*
+!.env.example
+
+# 运行时数据（对话记忆数据库等，不入库）
+backend/data/
+*.db
+*.db-shm
+*.db-wal
+
+# 系统
+.DS_Store
+Thumbs.db

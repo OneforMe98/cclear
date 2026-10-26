@@ -1,0 +1,58 @@
+name: CI
+
+# 什么时候跑：
+#   push 到任意分支、给任意分支提 PR、也可以在网页上手动点一下
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  backend:
+    name: 后端测试（pytest）
+    # 用 windows-latest：本项目是 Windows 专用工具（回收站、C 盘路径、send2trash），
+    # 在 Linux 上跑会测不到真实行为，宁可慢一点也要贴近生产环境。
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: 安装依赖
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      - name: 跑测试
+        working-directory: backend
+        # 测试不碰真实文件（全部用 tmp_path + monkeypatch），也不需要 API Key
+        run: pytest -q
+
+  frontend:
+    name: 前端检查（类型 + lint）
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 安装依赖
+        working-directory: frontend
+        run: npm ci
+
+      - name: 类型检查
+        working-directory: frontend
+        run: npx tsc -b
+
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
