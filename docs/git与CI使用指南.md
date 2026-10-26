@@ -176,9 +176,9 @@ git show e17d7c5:backend/app/compact.py    # 看那次提交时的完整内容
 
 ---
 
-## 6. 推到 GitHub（本项目的特殊情况）
+## 6. 推到 GitHub（本项目已改用 SSH）
 
-### ⚠️ 这个网络环境有个坑
+### ⚠️ 这个网络环境有问题
 
 实测结果：
 
@@ -188,34 +188,63 @@ https://api.github.com  → 正常
 github.com:22 (SSH)     → 通
 ```
 
-**所以必须先开代理。** 开了之后：
+**所以本项目最终改用 SSH**，不再依赖代理，也不用管 HTTPS 证书问题。
+
+### 当前配置
+
+```
+origin  git@github.com:OneforMe98/cclear.git
+```
+
+密钥位置：
+
+```
+C:\Users\ASUS\.ssh\id_ed25519        私钥（绝不外传）
+C:\Users\ASUS\.ssh\id_ed25519.pub    公钥（已加到 GitHub）
+```
+
+**以后推送就是一条命令，不需要代理、不需要密码：**
 
 ```powershell
-# 让 git 走代理（只对当前窗口生效）
-$env:HTTP_PROXY="http://127.0.0.1:7897"
+git push
+```
+
+### 验证连通性
+
+```powershell
+ssh -T git@github.com
+# 期望输出：Hi OneforMe98! You've successfully authenticated...
+# （后面那句 "does not provide shell access" 是正常的，GitHub 不给 shell）
+```
+
+### 如果哪天换了电脑，重新配 SSH
+
+```powershell
+# 1. 生成密钥（-N '""' 表示不设密码短语，全程免交互）
+ssh-keygen -t ed25519 -C "你的邮箱" -f "$env:USERPROFILE\.ssh\id_ed25519" -N '""'
+
+# 2. 复制公钥
+Get-Content "$env:USERPROFILE\.ssh\id_ed25519.pub"
+
+# 3. 粘到 https://github.com/settings/keys → New SSH key
+
+# 4. 验证
+ssh -T git@github.com
+```
+
+> **踩坑提醒**：跑 `ssh-keygen` 时它会依次问"保存路径"和"密码短语"，
+> **如果这时候粘贴了别的命令进去，密钥不会被创建**（它会把命令当成密码，
+> 且两次不一致直接退出）。想全程不被打断，就用上面的 `-N '""'` 一次性指定。
+
+### 备选：HTTPS + 代理
+
+如果哪天 SSH 也不通了：
+
+```powershell
+$env:HTTP_PROXY="http://127.0.0.1:7897"    # 换成你代理软件的端口
 $env:HTTPS_PROXY="http://127.0.0.1:7897"
-
-git push -u origin master
-```
-
-> 端口 `7897` 要换成你自己代理软件的端口（Clash 常见 7890/7897，v2ray 常见 10809）。
-> 查系统代理端口：`设置 → 网络和 Internet → 代理`。
-
-**第一次 push 会弹窗让你登录 GitHub**（Git Credential Manager），登录一次之后会记住。
-
-### 如果代理也不想开：用 SSH
-
-```powershell
-ssh-keygen -t ed25519 -C "你的邮箱"     # 一路回车，生成密钥
-cat ~/.ssh/id_ed25519.pub               # 复制输出的公钥
-```
-
-然后去 GitHub → Settings → SSH and GPG keys → New SSH key → 粘贴。
-
-之后把远端改成 SSH：
-
-```powershell
-git remote set-url origin git@github.com:OneforMe98/cclear.git
+git remote set-url origin https://github.com/OneforMe98/cclear.git
+git push
 ```
 
 ---
@@ -318,10 +347,13 @@ git reset                 # 后悔了：把暂存区清空（改动还在）
 | 看历史 | `git log --oneline` |
 | 丢弃未提交的改动 | `git restore <文件>` |
 | 撤销某次提交 | `git revert <提交号>` |
-| 推到 GitHub | `git push`（记得先开代理） |
+| 推到 GitHub | `git push`（已配 SSH，不需要代理） |
+| 验证 SSH 通不通 | `ssh -T git@github.com` |
 | 看 CI 结果 | 网页 `github.com/OneforMe98/cclear/actions` |
 | 仓库根在哪 | `git rev-parse --show-toplevel` |
 | 从 git 移除但保留文件 | `git rm --cached <文件>` |
+| 只跑某个测试 | `pytest tests/test_tools.py::test_xxx` |
+| 只跑名字含某词的测试 | `pytest -k delete` |
 
 ---
 
@@ -341,8 +373,7 @@ git diff
 git add -A
 git commit -m "feat: 扫描进度显示计时器"
 
-# 5. 推送（开了代理）
-$env:HTTPS_PROXY="http://127.0.0.1:7897"
+# 5. 推送（SSH，不需要代理）
 git push
 
 # 6. 去 GitHub Actions 看 CI 是否全绿
