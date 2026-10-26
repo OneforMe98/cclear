@@ -37,3 +37,55 @@ def test_agent_uses_config_temperature():
     from app import agent
 
     assert agent.MAX_STEPS == config.AGENT_MAX_STEPS
+
+
+def test_langsmith_disabled_by_default():
+    """默认必须是关闭的——追踪会把对话内容上传云端，不能默认开。"""
+    assert config.LANGSMITH_ENABLED is False
+
+
+def test_langsmith_requires_both_switch_and_key(monkeypatch):
+    """只开开关没填 Key、或只填 Key 没开开关，都不该启用（避免半配状态）。"""
+    # 只有开关，没有 Key
+    monkeypatch.setenv("LANGSMITH_TRACING", "1")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "")
+    reloaded = importlib.reload(config)
+    assert reloaded.LANGSMITH_ENABLED is False
+
+    # 只有 Key，没有开关
+    monkeypatch.setenv("LANGSMITH_TRACING", "0")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_pt_fake")
+    reloaded = importlib.reload(config)
+    assert reloaded.LANGSMITH_ENABLED is False
+
+    # 两者齐备 → 启用
+    monkeypatch.setenv("LANGSMITH_TRACING", "1")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_pt_fake")
+    reloaded = importlib.reload(config)
+    assert reloaded.LANGSMITH_ENABLED is True
+    # 且必须写回环境变量，LangChain 才认（它读 os.environ，不读 Python 变量）
+    import os
+
+    assert os.environ["LANGSMITH_TRACING"] == "true"
+    assert os.environ["LANGSMITH_API_KEY"] == "lsv2_pt_fake"
+
+    # 还原
+    for name in ("LANGSMITH_TRACING", "LANGSMITH_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    importlib.reload(config)
+
+
+def test_langsmith_off_clears_env(monkeypatch):
+    """关闭时必须显式写回 false——防止"上次开过、这次忘了关"导致悄悄上报。"""
+    import os
+
+    monkeypatch.setenv("LANGSMITH_TRACING", "0")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "")
+    reloaded = importlib.reload(config)
+    assert reloaded.LANGSMITH_ENABLED is False
+    assert os.environ["LANGSMITH_TRACING"] == "false"
+    assert os.environ["LANGCHAIN_TRACING_V2"] == "false"
+
+    monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
+    monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
+    importlib.reload(config)

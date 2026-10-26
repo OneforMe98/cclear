@@ -55,3 +55,32 @@ COMPACT_MAX_TOOL_CHARS = int(os.getenv("COMPACT_MAX_TOOL_CHARS", "1500"))
 
 # 压缩开关：设为 0 可关闭（用于对比"压缩前/后"的行为差异）
 COMPACT_ENABLED = os.getenv("COMPACT_ENABLED", "1").strip() not in ("0", "false", "False")
+
+# ---- LangSmith 链路追踪（可选，默认关闭）----
+# 打开后，每次 Agent 运行的全过程（每步 LLM 调用、工具执行、token 数、耗时）
+# 会上传到 https://smith.langchain.com 供可视化查看。
+#
+# ⚠️ 隐私提醒：上报内容包含完整的对话文本与工具输出——也就是"你问了什么"
+# 和"扫描到的文件路径"。这是把本机信息发到云端，必须由你明确同意才开启。
+#
+# 三个都配齐才生效：开关 + API Key + 项目名。
+LANGSMITH_TRACING = os.getenv("LANGSMITH_TRACING", "0").strip().lower() in ("1", "true")
+LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY", "").strip()
+LANGSMITH_PROJECT = os.getenv("LANGSMITH_PROJECT", "cclear").strip()
+
+# 只有在"开关打开 + Key 已填"时才真正启用，避免只填一半导致运行时报错。
+LANGSMITH_ENABLED = LANGSMITH_TRACING and bool(LANGSMITH_API_KEY)
+
+if LANGSMITH_ENABLED:
+    # LangChain / LangGraph 通过环境变量识别追踪配置（在 import 时就读取），
+    # 所以这里必须写回 os.environ，光有 Python 变量不够。
+    os.environ["LANGSMITH_TRACING"] = "true"
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"  # 旧版变量名，兼容旧版 SDK
+    os.environ["LANGSMITH_API_KEY"] = LANGSMITH_API_KEY
+    os.environ["LANGCHAIN_API_KEY"] = LANGSMITH_API_KEY
+    os.environ["LANGSMITH_PROJECT"] = LANGSMITH_PROJECT
+    os.environ["LANGCHAIN_PROJECT"] = LANGSMITH_PROJECT
+else:
+    # 显式关掉：避免"上次开过、这次忘了关"导致悄悄上报
+    os.environ["LANGSMITH_TRACING"] = "false"
+    os.environ["LANGCHAIN_TRACING_V2"] = "false"

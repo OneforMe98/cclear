@@ -25,6 +25,8 @@ from .config import (
     CHECKPOINT_DB,
     DEEPSEEK_API_KEY,
     DEEPSEEK_BASE_URL,
+    LANGSMITH_ENABLED,
+    LANGSMITH_PROJECT,
     MODEL_NAME,
     MODEL_TEMPERATURE,
     PROFILE_DB,
@@ -132,6 +134,9 @@ async def init_agent() -> None:
     global agent, _saver_cm
     # 画像要先初始化：即使没配 Key，用户也应该能在界面上看到已存的偏好
     profile.init(PROFILE_DB)
+    if LANGSMITH_ENABLED:
+        # 明确打出来：追踪会把对话内容和扫描路径上传到云端，不能悄悄开
+        print(f"[langsmith] 已启用链路追踪 → 项目 {LANGSMITH_PROJECT}（对话内容将上报云端）")
     if not DEEPSEEK_API_KEY:
         return
     _llm = ChatOpenAI(

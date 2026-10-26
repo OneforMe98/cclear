@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from . import agent as agent_module
 from . import profile
 from .compact import compact_messages
-from .config import MODEL_NAME, PROFILE_USER_ID
+from .config import LANGSMITH_ENABLED, MODEL_NAME, PROFILE_USER_ID
 
 
 @asynccontextmanager
@@ -312,6 +312,7 @@ def health() -> dict:
         "phase": "7",
         "model": MODEL_NAME,
         "api_key_configured": agent_module.agent is not None,
+        "langsmith": LANGSMITH_ENABLED,
     }
 
 
