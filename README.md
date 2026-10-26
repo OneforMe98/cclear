@@ -1,5 +1,7 @@
 # CCLEAR — 透明、可控的 C 盘清理 AI 助手
 
+[![CI](https://github.com/OneforMe98/cclear/actions/workflows/ci.yml/badge.svg)](https://github.com/OneforMe98/cclear/actions/workflows/ci.yml)
+
 一个网页版 Agent：**先分析、后建议，删除前必须经你确认，文件进回收站随时可恢复**，绝不偷偷动你的文件。
 
 - 详细设计：[docs/项目设计文档.md](docs/项目设计文档.md)
