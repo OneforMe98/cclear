@@ -1,5 +1,6 @@
 /** 工具名 → 中文短语。时间线和等待提示共用，避免两处各写一份。 */
 export const TOOL_LABELS: Record<string, string> = {
+  disk_overview: '查看磁盘容量',
   scan_directory_size: '扫描目录占用',
   find_large_files: '搜索大文件',
   detect_junk_dirs: '盘点垃圾目录',

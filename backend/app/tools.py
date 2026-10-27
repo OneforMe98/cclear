@@ -8,6 +8,7 @@
 """
 
 import os
+import shutil
 import time
 from pathlib import Path
 
@@ -15,16 +16,57 @@ from langchain_core.tools import tool
 from langgraph.types import interrupt
 from send2trash import send2trash
 
-# --- 安全限制：工具只允许扫描这些根目录 ---
-SAFE_ROOTS = [
+# --- 删除安全限制：只允许删除这些根目录下的内容 ---
+# 注意：这只约束"删除"。读取（扫描/查找）用更宽的范围，见 _is_read_allowed。
+DELETE_ROOTS = [
     Path.home(),                          # C:\Users\<你的用户名>
     Path(os.environ.get("TEMP", r"C:\Windows\Temp")),  # 系统临时目录
 ]
+# 向后兼容旧名字（测试与外部若引用 SAFE_ROOTS 仍可用）
+SAFE_ROOTS = DELETE_ROOTS
 
 MAX_DEPTH = 5         # 向下最多数几层目录
 MAX_FILE_DEPTH = 8    # 找大文件时允许的更深层级（文件常藏在 AppData 深处）
 TIMEOUT_SECONDS = 20  # 单次扫描总时长上限（防止大目录卡死）
 TOP_N = 10            # 最多返回多少项
+
+
+def _local_drives() -> list[str]:
+    """列出本机所有固定磁盘分区（如 ['C:\\\\', 'D:\\\\']），用于全盘总览与读取范围判断。"""
+    drives: list[str] = []
+    # Python 3.12+ 有 os.listdrives；旧版本回退到逐字母探测
+    if hasattr(os, "listdrives"):
+        try:
+            drives = list(os.listdrives())
+        except OSError:
+            drives = []
+    if not drives:
+        import string
+
+        for letter in string.ascii_uppercase:
+            root = f"{letter}:\\"
+            if os.path.exists(root):
+                drives.append(root)
+    return drives
+
+
+def _is_read_allowed(path: Path) -> bool:
+    """读取（扫描/查找）范围：任意本地磁盘上的真实路径都允许。
+
+    为什么比删除宽松得多：读目录大小不会修改任何文件，把它限制在用户主目录
+    会导致"C 盘用了 117G、只能看到 28G"这种反直觉体验。真正危险的是删除，
+    删除仍由 _is_safe（白名单）严格约束。
+    仅排除网络路径（UNC）——它们可能极慢且不属于本机，避免卡死。
+    """
+    raw = str(path)
+    if raw.startswith("\\\\"):  # UNC 网络共享，拒绝
+        return False
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+    return resolved.exists()
+
 
 
 def human_size(n: float) -> str:
@@ -59,10 +101,45 @@ def _dir_size(path: Path, started: float) -> int:
     return total
 
 
+def _drive_free_bytes(drive: str) -> int:
+    """返回该盘符的可用空间（字节）。失败时返回 0。"""
+    try:
+        return int(shutil.disk_usage(drive + "\\").free)
+    except (OSError, ValueError):
+        return 0
+
+
 def _is_safe(path: Path) -> bool:
-    """目标目录必须落在白名单范围内（含白名单目录本身）。"""
+    """删除范围：目标必须落在删除白名单内（含白名单目录本身）。"""
     resolved = path.resolve()
-    return any(resolved == root.resolve() or root.resolve() in resolved.parents for root in SAFE_ROOTS)
+    return any(resolved == root.resolve() or root.resolve() in resolved.parents for root in DELETE_ROOTS)
+
+
+@tool
+def disk_overview() -> str:
+    """查看本机各磁盘分区的总容量、已用空间、剩余空间（只读）。
+
+    回答"C 盘容量多大""还剩多少空间""哪个盘快满了"这类问题。
+    不需要任何参数，会自动列出所有本地磁盘。
+    """
+    drives = _local_drives()
+    if not drives:
+        return "没有检测到任何磁盘分区。"
+
+    lines = ["本机磁盘空间总览："]
+    for root in drives:
+        try:
+            usage = shutil.disk_usage(root)
+        except OSError:
+            continue
+        total = usage.total
+        used = usage.used
+        free = usage.free
+        percent = (used / total * 100) if total else 0
+        lines.append(
+            f"- {root}  总 {human_size(total)} · 已用 {human_size(used)}（{percent:.0f}%）· 可用 {human_size(free)}"
+        )
+    return "\n".join(lines)
 
 
 @tool(response_format="content_and_artifact")
@@ -71,22 +148,24 @@ def scan_directory_size(path: str = "") -> tuple[str, dict | None]:
 
     返回该目录下第一层子目录和文件各自的总大小，按从大到小排序（最多 10 项）。
     用于回答"C 盘哪个文件夹最占空间""这个目录为什么这么大"这类问题。
+    想了解整块磁盘的容量与剩余，请用 disk_overview；想看整盘各顶级目录的占用，
+    可以传 path="C:\\\\"。
 
     Args:
-        path: 要扫描的目录绝对路径，必须在允许范围内（用户主目录或系统临时目录）。
+        path: 要扫描的目录绝对路径（可以是 C 盘任意目录，如 C:\\ 或 C:\\Windows）。
               留空（推荐）则扫描当前用户主目录。
     """
     started = time.monotonic()
     target = Path(path).expanduser() if path.strip() else Path.home()
 
+    if str(target).startswith("\\\\"):
+        return "无法读取网络共享路径（\\\\server\\...），请只扫描本地磁盘。", None
     if not target.exists():
-        roots = "、".join(str(r) for r in SAFE_ROOTS)
-        return f"目录不存在：{path}。可扫描的范围：{roots}（留空 path 即扫描用户主目录）", None
+        return f"目录不存在：{path}。留空 path 即扫描用户主目录 {Path.home()}", None
     if not target.is_dir():
         return f"不是目录：{path}", None
-    if not _is_safe(target):
-        roots = "、".join(str(r) for r in SAFE_ROOTS)
-        return f"出于安全考虑，只能扫描这些范围：{roots}。已拒绝：{path}", None
+    if not _is_read_allowed(target):
+        return f"无法读取该目录（可能是网络路径或无权限）：{path}", None
 
     rows: list[tuple[str, int]] = []
     timeout_hit = False
@@ -171,20 +250,21 @@ def find_large_files(directory: str = "", min_size_mb: int = 100, limit: int = 2
     注意：如果要看"哪个文件夹总共多大"，请改用 scan_directory_size。
 
     Args:
-        directory: 要搜索的目录绝对路径，必须在允许范围内（用户主目录或系统临时目录）。留空则搜索当前用户主目录。
+        directory: 要搜索的目录绝对路径（可以是 C 盘任意目录，如 C:\\）。留空则搜索当前用户主目录。
         min_size_mb: 最小文件大小（单位 MB），默认 100。
         limit: 最多返回多少个文件，默认 20。
     """
     started = time.monotonic()
     target = Path(directory).expanduser() if directory.strip() else Path.home()
 
+    if str(target).startswith("\\\\"):
+        return "无法搜索网络共享路径（\\\\server\\...），请只搜索本地磁盘。"
     if not target.exists():
         return f"目录不存在：{directory}。留空 directory 即搜索用户主目录 {Path.home()}"
     if not target.is_dir():
         return f"不是目录：{directory}"
-    if not _is_safe(target):
-        roots = "、".join(str(r) for r in SAFE_ROOTS)
-        return f"出于安全考虑，只能搜索这些范围：{roots}。已拒绝：{directory}"
+    if not _is_read_allowed(target):
+        return f"无法搜索该目录（可能是网络路径或无权限）：{directory}"
 
     min_bytes = max(0, min_size_mb) * 1024 * 1024
     found, timed_out = _walk_files(target, started, min_bytes)
@@ -380,8 +460,18 @@ def delete_to_recycle_bin(paths: list[str]) -> str:
 
     # ---- human-in-the-loop 关键一步：暂停整个 Agent 图，等用户确认 ----
     # 先算清楚这批到底多大、多少个文件：用户有权知道"删 3 项"背后是 200MB 还是 20GB
+    # 也先记录磁盘状态，以便删除后给用户一份"清理前后对比"
     measured_started = time.monotonic()
     total_bytes, file_count = _measure_targets(checked, measured_started)
+
+    # 涉及的磁盘：每条待删路径所在的盘符，去重
+    drives_involved: list[str] = []
+    for p in checked:
+        drive = (p.drive or "").upper()
+        if drive and drive not in drives_involved:
+            drives_involved.append(drive)
+    before_free: dict[str, int] = {d: _drive_free_bytes(d) for d in drives_involved}
+
     decision = interrupt(
         {
             "type": "delete_confirm",
@@ -390,6 +480,7 @@ def delete_to_recycle_bin(paths: list[str]) -> str:
             "total_bytes": total_bytes,
             "total_size": human_size(total_bytes),
             "file_count": file_count,
+            "drives_before": {d: human_size(v) for d, v in before_free.items()},
         }
     )
     if not decision:
@@ -404,6 +495,9 @@ def delete_to_recycle_bin(paths: list[str]) -> str:
         except Exception as exc:  # noqa: BLE001 —— 单项失败不影响其余项
             failed.append(f"{p}（{exc}）")
 
+    # 删除后再次记录磁盘状态，形成"清理前后对比"
+    after_free: dict[str, int] = {d: _drive_free_bytes(d) for d in drives_involved}
+
     lines = [f"已删除到回收站 {len(done)} 项、约 {human_size(total_bytes)}（可从回收站恢复）："]
     lines += [f"- {item}" for item in done]
     if failed:
@@ -412,6 +506,21 @@ def delete_to_recycle_bin(paths: list[str]) -> str:
     if rejected:
         lines.append("以下项目未通过安全校验被跳过：")
         lines += [f"- {item}" for item in rejected]
+
+    lines.append("")
+    lines.append("【清理前后对比】（磁盘可用空间）")
+    for d in drives_involved:
+        b = before_free.get(d, 0)
+        a = after_free.get(d, 0)
+        delta = a - b
+        if delta == 0:
+            lines.append(f"- {d}：清理前 {human_size(b)} → 清理后 {human_size(a)}（暂无变化）")
+        else:
+            lines.append(f"- {d}：清理前 {human_size(b)} → 清理后 {human_size(a)}（+{human_size(delta)}）")
+    lines.append(
+        "注意：移入回收站不会立即释放磁盘空间——文件仍占着原来那块空间，"
+        "清空回收站后才会真正释放。上面的 '暂无变化' 是正常现象，不是 bug。"
+    )
     return "\n".join(lines)
 
 
@@ -450,6 +559,7 @@ def forget_preference(key: str) -> str:
 
 # 所有可用的工具都放在这个列表里，Agent 构建时统一挂载
 TOOLS = [
+    disk_overview,
     scan_directory_size,
     find_large_files,
     detect_junk_dirs,

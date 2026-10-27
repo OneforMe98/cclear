@@ -15,6 +15,7 @@ from app.tools import (
     MAX_DELETE_ITEMS,
     delete_to_recycle_bin,
     detect_junk_dirs,
+    disk_overview,
     find_large_files,
     human_size,
     scan_directory_size,
@@ -42,10 +43,20 @@ def test_human_size(size, expected):
 # ---------- 扫描工具：安全校验 ----------
 
 def test_scan_rejects_outside_safe_roots():
-    # C:\Windows 不在白名单（用户主目录/临时目录）里
+    # 旧版：扫描范围和删除一样只限用户主目录/临时目录。
+    # 新版（步骤 24）：读操作（扫描）范围放宽到任意本地磁盘，因为只读不会造成损害；
+    # 删除仍严格限制在 DELETE_ROOTS。因此 C:\Windows 现在可以被扫描。
     text, artifact = scan_directory_size.func(r"C:\Windows")
-    assert "只能扫描" in text or "拒绝" in text
+    # 不再拒绝，而是真正扫描（可能因权限/超时只返回部分，但不能是"拒绝"）
+    assert "只能扫描" not in text
+    assert "拒绝" not in text
+
+
+def test_scan_rejects_unc_network_path():
+    # 网络共享路径（UNC）被拒绝——避免扫描慢速共享卡死
+    text, artifact = scan_directory_size.func(r"\\server\share\folder")
     assert artifact is None
+    assert "无法读取" in text or "拒绝" in text or "网络" in text
 
 
 def test_scan_rejects_nonexistent():
@@ -115,7 +126,6 @@ def test_delete_user_approves_calls_send2trash(tmp_path, monkeypatch):
     monkeypatch.setattr("app.tools.interrupt", lambda payload: True)
 
     result = delete_to_recycle_bin.func([str(target)])
-
     assert deleted == [str(target)]
     assert "已删除到回收站 1 项" in result
 
@@ -219,9 +229,42 @@ def test_detect_junk_dirs_smoke():
         assert isinstance(artifact["entries"], list)
 
 
+def test_disk_overview_lists_drives():
+    """磁盘总览：至少列出 C 盘，且每行含"总/已用/可用"。"""
+    text = disk_overview.func()
+    assert "磁盘空间总览" in text
+    assert "C:" in text
+    assert "总" in text and "可用" in text
+
+
+def test_delete_reports_before_after_comparison(tmp_path, monkeypatch):
+    """删除后必须给出"清理前后对比"（磁盘可用空间）。"""
+    target = tmp_path / "junk.bin"
+    target.write_bytes(b"x" * 1024)
+
+    # 模拟磁盘可用空间：删除前 100、删除后 200（差值 +100）
+    calls = {"n": 0}
+
+    def fake_free(drive):
+        calls["n"] += 1
+        return 100 if calls["n"] == 1 else 200
+
+    monkeypatch.setattr("app.tools._drive_free_bytes", fake_free)
+    monkeypatch.setattr("app.tools.send2trash", lambda p: None)
+    monkeypatch.setattr("app.tools.interrupt", lambda payload: True)
+
+    result = delete_to_recycle_bin.func([str(target)])
+
+    assert "清理前后对比" in result
+    assert "清理前" in result and "清理后" in result
+    # 必须提醒"回收站不立即释放空间"，否则用户会误以为没清理成功
+    assert "回收站" in result and "释放" in result
+
+
 def test_tools_registry():
     names = {t.name for t in tools.TOOLS}
     assert names == {
+        "disk_overview",
         "scan_directory_size",
         "find_large_files",
         "detect_junk_dirs",
