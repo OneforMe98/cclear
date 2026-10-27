@@ -25,6 +25,14 @@ def test_user_home_placeholder_is_replaced():
     assert str(Path.home()) in agent.SYSTEM_PROMPT
 
 
+def test_scope_boundary_is_declared():
+    """职责边界必须写进 Prompt：否则模型会把工具当通用助手用（写作文、答八卦）。"""
+    assert "职责边界" in agent.SYSTEM_PROMPT
+    assert "C 盘" in agent.SYSTEM_PROMPT or "磁盘" in agent.SYSTEM_PROMPT
+    # 必须明确要求"简短拒绝"，避免长篇大论浪费 token
+    assert "简短" in agent.SYSTEM_PROMPT or "简短拒绝" in agent.SYSTEM_PROMPT
+
+
 def test_prompt_file_exists_and_readable():
     assert agent.PROMPT_FILE.exists()
     text = agent.PROMPT_FILE.read_text(encoding="utf-8")

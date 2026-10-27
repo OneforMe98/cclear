@@ -242,7 +242,6 @@ export default function App() {
           <button className="new-chat-btn" onClick={startNewChat} disabled={loading || !!pendingConfirm}>
             新对话
           </button>
-          <span className="phase-badge">Phase 7 · 对话记忆 · 压缩 · 进度提示</span>
         </div>
       </header>
 

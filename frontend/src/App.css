@@ -52,16 +52,6 @@
   font-size: 12px;
 }
 
-.phase-badge {
-  font-size: 12px;
-  color: var(--muted);
-  border: 1px solid var(--border);
-  background: var(--panel);
-  padding: 6px 12px;
-  border-radius: 999px;
-  white-space: nowrap;
-}
-
 /* ---------- 工作区：聊天 + 侧栏 ---------- */
 .workspace {
   flex: 1;
