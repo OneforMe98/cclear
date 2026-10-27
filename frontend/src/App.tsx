@@ -27,6 +27,8 @@ interface ToolActivity {
 const PROFILE_TOOL_NAMES = new Set(['remember_preference', 'forget_preference'])
 
 interface ChartCard {
+  /** 卡片来源：目录扫描 or 垃圾盘点。用于"同类结果替换旧卡片"而不是无限堆叠 */
+  kind: 'dir_sizes' | 'junk'
   title: string
   totalBytes?: number
   items: ChartItem[]
@@ -36,6 +38,7 @@ interface ChartCard {
 function artifactToCard(artifact: DirSizesArtifact | JunkArtifact): ChartCard | null {
   if (artifact.kind === 'dir_sizes' && artifact.entries.length > 0) {
     return {
+      kind: 'dir_sizes',
       title: '目录占用排行',
       totalBytes: artifact.total_bytes,
       items: artifact.entries.map((e) => ({ name: e.name, bytes: e.bytes })),
@@ -43,12 +46,30 @@ function artifactToCard(artifact: DirSizesArtifact | JunkArtifact): ChartCard | 
   }
   if (artifact.kind === 'junk' && artifact.entries.length > 0) {
     return {
+      kind: 'junk',
       title: '垃圾目录盘点',
       totalBytes: artifact.total_bytes,
       items: artifact.entries.map((e) => ({ name: e.label, bytes: e.bytes })),
     }
   }
   return null
+}
+
+/**
+ * 把新卡片并入已有列表：同 kind 的旧卡片被替换（保留位置），不同 kind 追加。
+ *
+ * 为什么不是简单 append：用户可能反复扫描同一个目录，append 会让右侧堆出一堆
+ * 几乎相同的图；为什么也不是整体清空：右侧面板的定位是"扫描结果常驻"，
+ * 问一句别的问题就把图清掉，等于让用户丢失刚看到的数据。
+ */
+function upsertCards(prev: ChartCard[], incoming: ChartCard[]): ChartCard[] {
+  const next = [...prev]
+  for (const card of incoming) {
+    const idx = next.findIndex((c) => c.kind === card.kind)
+    if (idx >= 0) next[idx] = card
+    else next.push(card)
+  }
+  return next
 }
 
 const THREAD_KEY = 'cclear_thread_id'
@@ -93,11 +114,11 @@ export default function App() {
       .then((history) => {
         if (cancelled) return
         if (history.messages.length > 0) setMessages(history.messages)
-        // 恢复图表卡片：把历史里所有工具产物重新映射成卡片
+        // 恢复图表卡片：历史里可能有多批扫描结果，同 kind 只保留最新一份
         const cards = (history.artifacts ?? [])
           .map((a) => artifactToCard(a))
           .filter((c): c is ChartCard => c !== null)
-        if (cards.length > 0) setChartCards(cards)
+        if (cards.length > 0) setChartCards((prev) => upsertCards(prev, cards))
         // 刷新时如果正停在"等待删除确认"，把确认卡片也恢复出来
         if (history.pending_confirm) setPendingConfirm(history.pending_confirm)
       })
@@ -167,7 +188,7 @@ export default function App() {
       const artifact = result.artifact
       if (artifact) {
         const card = artifactToCard(artifact)
-        if (card) setChartCards((prev) => [...prev, card])
+        if (card) setChartCards((prev) => upsertCards(prev, [card]))
       }
     },
   }
@@ -179,9 +200,9 @@ export default function App() {
     const now = new Date().toISOString()
     const userMsg: ChatMessage = { role: 'user', content, ts: now }
 
-    // 新一轮对话：清空上一轮的工具时间线和图表卡片
+    // 新一轮对话：只清空"本轮工具时间线"。
+    // 图表卡片不清空——右侧面板定位是"扫描结果常驻"，问一句别的问题不该让图消失。
     setToolActivity([])
-    setChartCards([])
     // 本地先显示用户消息 + 空助手占位；历史记忆由服务端负责，只发这一句新消息
     setMessages((prev) => [...prev, userMsg, { role: 'assistant', content: '', ts: now }])
     setStartedAt(Date.now())
@@ -297,8 +318,8 @@ export default function App() {
                 <p className="insight-empty-sub">让它"看看哪里最占空间"或"盘点垃圾目录"，图表会显示在这里</p>
               </div>
             ) : (
-              chartCards.map((card, i) => (
-                <div className="insight-group" key={i}>
+              chartCards.map((card) => (
+                <div className="insight-group" key={card.kind}>
                   <Suspense fallback={<div className="chart-loading">图表加载中…</div>}>
                     <DiskPieChart items={card.items} />
                     <DiskUsageChart title={card.title} totalBytes={card.totalBytes} items={card.items} />
