@@ -444,19 +444,25 @@ def delete_to_recycle_bin(paths: list[str]) -> str:
 
     checked: list[Path] = []
     rejected: list[str] = []
+    allowed_roots = "、".join(str(r) for r in DELETE_ROOTS)
     for raw in paths:
         p = Path(raw).expanduser()
         if not p.exists():
-            rejected.append(f"{raw}（不存在）")
+            rejected.append(f"{raw}（路径不存在，可能已删除或拼写有误）")
         elif not _is_safe(p):
-            rejected.append(f"{raw}（不在允许的扫描范围内）")
+            rejected.append(f"{raw}（超出可删除范围，仅允许：{allowed_roots}）")
         elif _is_forbidden(p):
             rejected.append(f"{raw}（系统关键位置，禁止删除）")
         else:
             checked.append(p)
 
     if not checked:
-        return "全部路径都未通过安全校验，未删除任何东西：\n" + "\n".join(rejected)
+        return (
+            "全部路径都未通过安全校验，未删除任何东西：\n"
+            + "\n".join(rejected)
+            + f"\n\n可删除范围：{allowed_roots}"
+            "（只清理用户目录与临时目录里的文件，其他位置一律不动）"
+        )
 
     # ---- human-in-the-loop 关键一步：暂停整个 Agent 图，等用户确认 ----
     # 先算清楚这批到底多大、多少个文件：用户有权知道"删 3 项"背后是 200MB 还是 20GB
