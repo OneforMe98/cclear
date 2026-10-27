@@ -5,6 +5,12 @@ export interface ConfirmPayload {
   type: string
   paths: string[]
   rejected?: string[]
+  /** 待删内容总体积（字节） */
+  total_bytes?: number
+  /** 待删内容总体积（已格式化，如 "1.2 GB"） */
+  total_size?: string
+  /** 待删内容包含的文件总数（目录会递归统计） */
+  file_count?: number
 }
 
 /** 工具执行完成的事件（用于时间线展示） */

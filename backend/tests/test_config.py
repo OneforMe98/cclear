@@ -39,9 +39,22 @@ def test_agent_uses_config_temperature():
     assert agent.MAX_STEPS == config.AGENT_MAX_STEPS
 
 
-def test_langsmith_disabled_by_default():
-    """默认必须是关闭的——追踪会把对话内容上传云端，不能默认开。"""
-    assert config.LANGSMITH_ENABLED is False
+def test_langsmith_disabled_by_default(monkeypatch):
+    """默认必须是关闭的——追踪会把对话内容上传云端，不能默认开。
+
+    注意：这里显式把环境变量置成"未开启"再 reload，而不是依赖"没配 .env"。
+    因为 config.py 导入时会 load_dotenv()，开发机上的 .env 可能已经配了 Key，
+    直接断言 config.LANGSMITH_ENABLED 会变成"测当前机器配置"，换台机器就红。
+    """
+    monkeypatch.setenv("LANGSMITH_TRACING", "0")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "")
+    reloaded = importlib.reload(config)
+    try:
+        assert reloaded.LANGSMITH_ENABLED is False
+    finally:
+        monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
+        monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
+        importlib.reload(config)
 
 
 def test_langsmith_requires_both_switch_and_key(monkeypatch):

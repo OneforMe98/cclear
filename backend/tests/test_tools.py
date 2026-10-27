@@ -150,6 +150,54 @@ def test_delete_partial_rejection(tmp_path, monkeypatch):
     assert "安全校验被跳过" in result
 
 
+def test_delete_confirm_payload_reports_size_and_file_count(tmp_path, monkeypatch):
+    """确认卡片必须带上体积和文件数——用户有权知道"删 1 项"背后是 200MB 还是 20GB。"""
+    # 造一个目录，内含 3 个文件，合计约 3MB
+    folder = tmp_path / "bigcache"
+    folder.mkdir()
+    for i in range(3):
+        (folder / f"f{i}.bin").write_bytes(b"x" * (1024 * 1024))
+
+    captured: dict = {}
+
+    def fake_interrupt(payload):
+        captured.update(payload)
+        return False  # 用户拒绝，避免真的删
+
+    monkeypatch.setattr("app.tools.send2trash", lambda p: None)
+    monkeypatch.setattr("app.tools.interrupt", fake_interrupt)
+
+    delete_to_recycle_bin.func([str(folder)])
+
+    # 体积：3 个 1MB 文件 → 约 3MB；按"项"只算 1 项，但体积/文件数必须是真实的
+    assert captured["total_bytes"] >= 3 * 1024 * 1024
+    assert captured["total_size"].endswith("MB")
+    assert captured["file_count"] == 3
+
+
+def test_delete_size_counts_nested_files(tmp_path, monkeypatch):
+    """嵌套子目录里的文件也要算进体积和文件数（按项计数会严重低估）。"""
+    root = tmp_path / "root"
+    (root / "sub").mkdir(parents=True)
+    (root / "a.bin").write_bytes(b"x" * 1024)
+    (root / "sub" / "b.bin").write_bytes(b"x" * 2048)
+    (root / "sub" / "c.bin").write_bytes(b"x" * 4096)
+
+    captured: dict = {}
+
+    def fake_interrupt(payload):
+        captured.update(payload)
+        return False
+
+    monkeypatch.setattr("app.tools.send2trash", lambda p: None)
+    monkeypatch.setattr("app.tools.interrupt", fake_interrupt)
+
+    delete_to_recycle_bin.func([str(root)])
+
+    assert captured["file_count"] == 3
+    assert captured["total_bytes"] == 1024 + 2048 + 4096
+
+
 # ---------- 其他工具：基本可用性 ----------
 
 def test_find_large_files_finds_big_file(tmp_path):

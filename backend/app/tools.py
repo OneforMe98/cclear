@@ -282,6 +282,57 @@ FORBIDDEN_ROOTS = [
 MAX_DELETE_ITEMS = 50  # 一次删除请求最多多少项
 
 
+def _measure_targets(paths: list[Path], started: float) -> tuple[int, int]:
+    """统计这批待删路径的总体积和总文件数。
+
+    为什么必须算体积：上限是"50 项"，但一个目录可能装着几万个文件——
+    按"项"计数会让"删 1 个大目录"看起来比"删 10 个小文件"更安全，
+    这是危险的错觉。体积和文件数才是用户真正在意的量。
+    返回 (总字节数, 文件数)；超时则提前返回已统计到的部分。
+    """
+    total_bytes = 0
+    file_count = 0
+    for p in paths:
+        if time.monotonic() - started > TIMEOUT_SECONDS:
+            break
+        if p.is_file():
+            try:
+                total_bytes += p.stat().st_size
+                file_count += 1
+            except OSError:
+                continue
+        elif p.is_dir():
+            size, count = _walk_stats(p, started)
+            total_bytes += size
+            file_count += count
+    return total_bytes, file_count
+
+
+def _walk_stats(root: Path, started: float) -> tuple[int, int]:
+    """递归统计一个目录的体积与文件数（超时即停，不做深度限制——这里要的是真实大小）。"""
+    size = 0
+    count = 0
+    stack = [root]
+    while stack:
+        if time.monotonic() - started > TIMEOUT_SECONDS:
+            break
+        current = stack.pop()
+        try:
+            with os.scandir(current) as it:
+                for entry in it:
+                    try:
+                        if entry.is_file(follow_symlinks=False):
+                            size += entry.stat(follow_symlinks=False).st_size
+                            count += 1
+                        elif entry.is_dir(follow_symlinks=False):
+                            stack.append(Path(entry.path))
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return size, count
+
+
 def _is_forbidden(path: Path) -> bool:
     """系统关键位置、或白名单根目录本身，一律禁止删除。"""
     resolved = path.resolve()
@@ -328,12 +379,17 @@ def delete_to_recycle_bin(paths: list[str]) -> str:
         return "全部路径都未通过安全校验，未删除任何东西：\n" + "\n".join(rejected)
 
     # ---- human-in-the-loop 关键一步：暂停整个 Agent 图，等用户确认 ----
-    # 图恢复后，interrupt() 的返回值就是用户的决定（True=批准 / False=拒绝）
+    # 先算清楚这批到底多大、多少个文件：用户有权知道"删 3 项"背后是 200MB 还是 20GB
+    measured_started = time.monotonic()
+    total_bytes, file_count = _measure_targets(checked, measured_started)
     decision = interrupt(
         {
             "type": "delete_confirm",
             "paths": [str(p) for p in checked],
             "rejected": rejected,
+            "total_bytes": total_bytes,
+            "total_size": human_size(total_bytes),
+            "file_count": file_count,
         }
     )
     if not decision:
@@ -348,7 +404,7 @@ def delete_to_recycle_bin(paths: list[str]) -> str:
         except Exception as exc:  # noqa: BLE001 —— 单项失败不影响其余项
             failed.append(f"{p}（{exc}）")
 
-    lines = [f"已删除到回收站 {len(done)} 项（可从回收站恢复）："]
+    lines = [f"已删除到回收站 {len(done)} 项、约 {human_size(total_bytes)}（可从回收站恢复）："]
     lines += [f"- {item}" for item in done]
     if failed:
         lines.append("以下项目删除失败：")
