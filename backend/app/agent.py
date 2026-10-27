@@ -41,29 +41,26 @@ MAX_STEPS = AGENT_MAX_STEPS
 # 需要什么"现场信息"，就由我们从程序这边动态注入。这是 Agent 工程里很常用的手法。
 USER_HOME = Path.home()
 
-SYSTEM_PROMPT = f"""你是 CCLEAR，一个帮助用户分析和清理 Windows C 盘空间的 AI 助手。
+# System Prompt 存在独立文件里（app/prompts/system.md），改话术不用碰 Python 代码。
+# 文件里用 {{user_home}} 这样的占位符，加载时替换成真实值。
+PROMPT_FILE = Path(__file__).resolve().parent / "prompts" / "system.md"
 
-你的三条原则：
-1. 透明：结论必须基于真实数据，不猜测、不编造
-2. 安全：你只做只读分析，永远不建议用户直接删除系统关键文件
-3. 克制：先用工具拿到真实数据再下结论；工具扫描不到的内容，如实说明而不是编造
 
-工具使用说明（你有五个工具）：
-- scan_directory_size：看"某个文件夹总共多大"、"某目录下各项内容的占用排行"。不传 path 时默认扫描用户主目录 {USER_HOME}。
-- find_large_files：递归找出指定目录下"单个最大的文件"（可按最小大小过滤）。适合"哪些文件最占地方""找出最大的安装包/视频"。
-- detect_junk_dirs：盘点常见的系统垃圾目录（临时文件、缓存、回收站、Windows.old 等）并统计大小，不需要参数。适合"有什么垃圾可以清理""能释放多少空间"。
-- delete_to_recycle_bin：把用户明确要求清理的路径删除到回收站（可恢复）。调用后系统会暂停并请用户确认，用户拒绝则不会删除任何东西。
-- remember_preference / forget_preference：记住或忘记用户的**长期偏好**（跨会话有效）。
+def _load_system_prompt() -> str:
+    """读取 Prompt 模板并注入运行时变量。
 
-选择原则：问"哪个文件夹占空间"→ 用 scan_directory_size；问"哪个文件最大"→ 用 find_large_files；问"有什么垃圾可清理/能释放多少空间"→ 用 detect_junk_dirs。可以组合使用，例如先 detect_junk_dirs 盘点，再对某个目录用 scan_directory_size 下钻。工具返回的是真实扫描结果，回答时引用其中的具体名称和数字，绝不编造路径或数字。
+    - 用 str.replace 而不是 str.format：Prompt 里可能出现 JSON、花括号示例，
+      format 会把它们误当成占位符而报错。只替换我们自己认识的标记，最安全。
+    - 文件缺失时抛出清晰错误：Prompt 是 Agent 的"人格"，缺失必须立刻暴露，
+      而不是让模型带着半截人设上岗。
+    """
+    if not PROMPT_FILE.exists():
+        raise FileNotFoundError(f"找不到 System Prompt 模板：{PROMPT_FILE}")
+    template = PROMPT_FILE.read_text(encoding="utf-8")
+    return template.replace("{{user_home}}", str(USER_HOME)).strip()
 
-删除纪律（最高优先级）：
-1. 删除前必须先扫描分析，向用户说明要删什么、为什么安全，再调用 delete_to_recycle_bin
-2. 只删除用户明确要求清理的路径；用户没点名的用户资料（文档、桌面、下载等）一律不主动删
-3. 永远不要把系统目录（Windows、Program Files、ProgramData）或用户主目录本身放进删除清单
-4. 用户拒绝确认后，立即停止删除，并询问用户还需要什么帮助
 
-回答要求：简洁的中文，适当使用列表和标题。"""
+SYSTEM_PROMPT = _load_system_prompt()
 
 
 def build_system_prompt(compact_note: str = "") -> str:
